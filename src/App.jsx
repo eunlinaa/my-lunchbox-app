@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Plus, Edit2, Trash2, ChevronLeft, Check, PlusCircle, MinusCircle, Utensils, Sparkles, Loader2, X, CheckCircle2, Circle, Volume2, Activity, Info } from 'lucide-react';
 
 export default function App() {
-  // 사용자의 API 키 (이미 발급받으신 키를 여기에 넣었습니다)
+  // 사용자의 API 키
   const API_KEY = "AIzaSyD4oWNHHtDl96hsgqvsyME30hdoGjMUI4Y"; 
 
   const [recipes, setRecipes] = useState(() => {
@@ -28,30 +28,49 @@ export default function App() {
     setTimeout(() => setIsSaving(false), 500);
   };
 
+  // 404 에러 방지를 위해 모델명을 여러 버전으로 시도하는 함수
+  const callGeminiAi = async (prompt, systemInstruction) => {
+    // 시도할 모델 목록 (안정적인 순서)
+    const models = ["gemini-1.5-flash-latest", "gemini-1.5-flash", "gemini-1.5-pro"];
+    let lastError = null;
+
+    for (const modelName of models) {
+      try {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${API_KEY}`;
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            systemInstruction: { parts: [{ text: systemInstruction }] },
+            generationConfig: { responseMimeType: "application/json" }
+          })
+        });
+
+        if (!res.ok) {
+          const errorData = await res.json();
+          throw new Error(errorData.error?.message || `HTTP ${res.status}`);
+        }
+
+        const data = await res.json();
+        return JSON.parse(data.candidates[0].content.parts[0].text);
+      } catch (err) {
+        lastError = err;
+        continue; // 다음 모델로 재시도
+      }
+    }
+    throw lastError;
+  };
+
   const handleGenerateAiRecipe = async () => {
     if (!aiInput.trim()) return;
     setIsGenerating(true);
     try {
-      const payload = {
-        contents: [{ parts: [{ text: `${aiInput} 재료로 맛있는 도시락 레시피를 만들어줘.` }] }],
-        systemInstruction: { parts: [{ text: "당신은 도시락 레시피 전문가입니다. 반드시 JSON 형식으로만 응답하세요. 키값: title (문자열), ingredients (문자열 배열), steps (문자열 배열). 다른 설명은 절대 하지 마세요." }] },
-        generationConfig: { responseMimeType: "application/json" }
-      };
-
-      // 404 에러 해결을 위해 가장 안정적인 모델명인 gemini-1.5-flash로 수정
-      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${API_KEY}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-
-      const data = await res.json();
-      if (data.error) throw new Error(data.error.message);
+      const systemPrompt = "당신은 도시락 레시피 전문가입니다. 반드시 JSON 형식으로만 응답하세요. 키값: title (문자열), ingredients (문자열 배열), steps (문자열 배열). 다른 설명은 절대 하지 마세요.";
+      const userPrompt = `${aiInput} 재료를 사용한 도시락 레시피를 만들어줘.`;
       
-      const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (!text) throw new Error("AI 응답을 받지 못했습니다.");
-      
-      const parsed = JSON.parse(text);
+      const parsed = await callGeminiAi(userPrompt, systemPrompt);
+
       const newRecipe = {
         id: Date.now().toString(),
         title: parsed.title,
@@ -65,7 +84,7 @@ export default function App() {
       setIsAiModalOpen(false);
       setAiInput('');
     } catch (error) {
-      alert("오류 발생: " + error.message);
+      alert("AI 연결 실패: " + error.message + "\nAPI 키가 활성화될 때까지 1~2분 정도 걸릴 수 있습니다.");
     } finally {
       setIsGenerating(false);
     }
@@ -75,20 +94,10 @@ export default function App() {
     if (!editingRecipe || editingRecipe.ingredients.length === 0) return;
     setIsAnalyzing(true);
     try {
-      const payload = {
-        contents: [{ parts: [{ text: `다음 재료들의 영양 성분을 분석해줘: ${editingRecipe.ingredients.map(i => i.text).join(', ')}` }] }],
-        systemInstruction: { parts: [{ text: "영양학 전문가로서 JSON으로만 응답하세요. 키값: calories (숫자), protein (숫자), carbs (숫자), fat (숫자), tip (문자열)" }] },
-        generationConfig: { responseMimeType: "application/json" }
-      };
-
-      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${API_KEY}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-
-      const data = await res.json();
-      const parsed = JSON.parse(data.candidates[0].content.parts[0].text);
+      const systemPrompt = "영양학 전문가로서 JSON으로만 응답하세요. 키값: calories (숫자), protein (숫자), carbs (숫자), fat (숫자), tip (문자열)";
+      const userPrompt = `다음 재료들의 총 영양 성분을 분석해줘: ${editingRecipe.ingredients.map(i => i.text).join(', ')}`;
+      
+      const parsed = await callGeminiAi(userPrompt, systemPrompt);
       updateEditingRecipe({ ...editingRecipe, nutrition: parsed });
     } catch (error) {
       alert("영양 분석 실패");
