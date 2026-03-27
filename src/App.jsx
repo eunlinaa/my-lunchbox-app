@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Plus, Edit2, Trash2, ChevronLeft, Check, PlusCircle, MinusCircle, Utensils, Sparkles, Loader2, X, CheckCircle2, Circle, Volume2, Activity, Info } from 'lucide-react';
 
 export default function App() {
-  // AI 기능을 사용하려면 아래 빈칸에 구글 Gemini API 키를 넣으세요.
+  // 여기에 본인의 API 키를 넣으세요
   const API_KEY = "AIzaSyBA7Z3o4gqU_jhQia0ff7qD4cx-UQQcPG8"; 
 
   const [recipes, setRecipes] = useState(() => {
@@ -29,57 +29,28 @@ export default function App() {
     setTimeout(() => setIsSaving(false), 500);
   };
 
-  const convertPcmToWav = (base64Data, sampleRate = 24000) => {
-    const binaryString = atob(base64Data);
-    const bytes = new Uint8Array(binaryString.length);
-    for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
-    const pcmData = new Int16Array(bytes.buffer);
-    const dataSize = pcmData.length * 2;
-    const buffer = new ArrayBuffer(44 + dataSize);
-    const view = new DataView(buffer);
-    const writeString = (offset, string) => { for (let i = 0; i < string.length; i++) view.setUint8(offset + i, string.charCodeAt(i)); };
-    writeString(0, 'RIFF'); view.setUint32(4, 36 + dataSize, true); writeString(8, 'WAVE'); writeString(12, 'fmt ');
-    view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
-    view.setUint32(24, sampleRate, true); view.setUint32(28, sampleRate * 2, true); view.setUint16(32, 2, true);
-    view.setUint16(34, 16, true); writeString(36, 'data'); view.setUint32(40, dataSize, true);
-    for (let i = 0; i < pcmData.length; i++) view.setInt16(44 + i * 2, pcmData[i], true);
-    return new Blob([view], { type: 'audio/wav' });
-  };
-
-  const handlePlayAudio = async (recipe, e) => {
+  const handlePlayAudio = (recipe, e) => {
     e.stopPropagation();
-    if (!API_KEY) return alert("API 키가 필요합니다.");
-    if (playingRecipeId === recipe.id) return;
+    if (playingRecipeId === recipe.id) {
+      window.speechSynthesis.cancel();
+      setPlayingRecipeId(null);
+      return;
+    }
     
     setPlayingRecipeId(recipe.id);
-    try {
-      const text = `도시락 이름은 ${recipe.title || '이름 없는 레시피'} 입니다. 조리법을 안내해 드릴게요. ` + recipe.steps.filter(s => s.trim()).map((s, i) => `${i + 1}번. ${s}`).join(' ');
-      const payload = {
-        contents: [{ parts: [{ text }] }],
-        generationConfig: { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Kore" } } } },
-        model: "gemini-2.5-flash-preview-tts"
-      };
-
-      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${API_KEY}`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
-      });
-      const data = await res.json();
-      const inlineData = data.candidates?.[0]?.content?.parts?.[0]?.inlineData;
-      if (!inlineData) throw new Error("음성 데이터를 가져오지 못했습니다.");
-
-      const wavBlob = convertPcmToWav(inlineData.data, 24000);
-      const audioUrl = URL.createObjectURL(wavBlob);
-      const audio = new Audio(audioUrl);
-      audio.onended = () => { setPlayingRecipeId(null); URL.revokeObjectURL(audioUrl); };
-      await audio.play();
-    } catch (err) {
-      alert("음성 생성 중 오류가 발생했습니다.");
-      setPlayingRecipeId(null);
-    }
+    const text = `도시락 이름은 ${recipe.title || '이름 없는 레시피'} 입니다. 조리법을 안내해 드릴게요. ` + recipe.steps.filter(s => s.trim()).map((s, i) => `${i + 1}번. ${s}`).join(' ');
+    
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = 'ko-KR';
+    utterance.onend = () => setPlayingRecipeId(null);
+    utterance.onerror = () => setPlayingRecipeId(null);
+    
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(utterance);
   };
 
   const handleAnalyzeNutrition = async () => {
-    if (!API_KEY) return alert("API 키가 필요합니다.");
+    if (!API_KEY) return alert("API 키를 입력해주세요.");
     if (!editingRecipe || editingRecipe.ingredients.length === 0) return;
     const validIngredients = editingRecipe.ingredients.filter(i => i.text.trim() !== '').map(i => i.text);
     if (validIngredients.length === 0) return alert("재료를 먼저 입력해주세요!");
@@ -102,21 +73,25 @@ export default function App() {
         }
       };
 
-      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${API_KEY}`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${API_KEY}`, {
+        method: 'POST', 
+        headers: { 'Content-Type': 'application/json' }, 
+        body: JSON.stringify(payload)
       });
       const data = await res.json();
+      if (data.error) throw new Error(data.error.message);
+
       const parsed = JSON.parse(data.candidates[0].content.parts[0].text);
       updateEditingRecipe({ ...editingRecipe, nutrition: parsed });
     } catch (error) {
-      alert('영양 분석 중 오류가 발생했습니다.');
+      alert(`에러: ${error.message}`);
     } finally {
       setIsAnalyzing(false);
     }
   };
 
   const handleGenerateAiRecipe = async () => {
-    if (!API_KEY) return alert("API 키가 필요합니다.");
+    if (!API_KEY) return alert("API 키를 입력해주세요.");
     if (!aiInput.trim()) return;
     setIsGenerating(true);
     try {
@@ -133,10 +108,14 @@ export default function App() {
         }
       };
 
-      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${API_KEY}`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${API_KEY}`, {
+        method: 'POST', 
+        headers: { 'Content-Type': 'application/json' }, 
+        body: JSON.stringify(payload)
       });
       const data = await res.json();
+      if (data.error) throw new Error(data.error.message);
+
       const parsed = JSON.parse(data.candidates[0].content.parts[0].text);
 
       const newRecipe = {
@@ -152,7 +131,7 @@ export default function App() {
       setIsAiModalOpen(false);
       setAiInput('');
     } catch (error) {
-      alert('레시피 생성 중 오류가 발생했습니다.');
+      alert(`에러: ${error.message}`);
     } finally {
       setIsGenerating(false);
     }
@@ -334,8 +313,8 @@ export default function App() {
                 {recipe.steps.filter(s => s.trim() !== '').length > 1 ? '\n...' : ''}
                 
                 {recipe.steps.some(s => s.trim() !== '') && (
-                  <button onClick={(e) => handlePlayAudio(recipe, e)} disabled={playingRecipeId === recipe.id} className="absolute bottom-3 right-3 bg-white/90 shadow-sm border border-slate-100 text-sky-500 px-3 py-1.5 rounded-full flex items-center gap-1.5 text-xs font-bold hover:bg-sky-50 disabled:opacity-70">
-                    {playingRecipeId === recipe.id ? <><Volume2 size={14} className="animate-pulse text-sky-400" /> 재생 중...</> : <><Volume2 size={14} /> 조리법 듣기 ✨</>}
+                  <button onClick={(e) => handlePlayAudio(recipe, e)} className="absolute bottom-3 right-3 bg-white/90 shadow-sm border border-slate-100 text-sky-500 px-3 py-1.5 rounded-full flex items-center gap-1.5 text-xs font-bold hover:bg-sky-50">
+                    {playingRecipeId === recipe.id ? <><Volume2 size={14} className="animate-pulse text-sky-400" /> 중지</> : <><Volume2 size={14} /> 조리법 듣기 ✨</>}
                   </button>
                 )}
               </div>
