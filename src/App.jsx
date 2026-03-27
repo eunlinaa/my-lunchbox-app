@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Plus, Edit2, Trash2, ChevronLeft, Check, PlusCircle, MinusCircle, Utensils, Sparkles, Loader2, X, CheckCircle2, Circle, Volume2, Activity, Info } from 'lucide-react';
 
 export default function App() {
-  const API_KEY = "AIzaSyBxiWfWNtrmya6iQ9Ccz3HMY1NweHvXiR8"; // 여기에 본인의 API 키를 넣으세요
+  const API_KEY = "AIzaSyD4oWNHHtDl96hsgqvsyME30hdoGjMUI4Y"; 
 
   const [recipes, setRecipes] = useState(() => {
     const saved = localStorage.getItem('lunchbox_recipes');
