@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Plus, Edit2, Trash2, ChevronLeft, Check, PlusCircle, MinusCircle, Utensils, Sparkles, Loader2, X, CheckCircle2, Circle, Volume2, Activity, Info } from 'lucide-react';
 
 export default function App() {
+  // 사용자의 API 키
   const API_KEY = "AIzaSyD4oWNHHtDl96hsgqvsyME30hdoGjMUI4Y"; 
 
   const [recipes, setRecipes] = useState(() => {
@@ -27,37 +28,49 @@ export default function App() {
     setTimeout(() => setIsSaving(false), 500);
   };
 
-  const callGemini = async (prompt, system) => {
-    // 404 에러 방지를 위해 가장 안정적인 모델 경로 사용
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${API_KEY}`;
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        systemInstruction: { parts: [{ text: system }] },
-        generationConfig: { responseMimeType: "application/json" }
-      })
-    });
-    
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error?.message || `HTTP ${response.status}`);
+  // 404 에러 방지를 위해 모델명을 여러 버전으로 시도하는 함수
+  const callGeminiAi = async (prompt, systemInstruction) => {
+    // 시도할 모델 목록 (안정적인 순서)
+    const models = ["gemini-1.5-flash-latest", "gemini-1.5-flash", "gemini-1.5-pro"];
+    let lastError = null;
+
+    for (const modelName of models) {
+      try {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${API_KEY}`;
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            systemInstruction: { parts: [{ text: systemInstruction }] },
+            generationConfig: { responseMimeType: "application/json" }
+          })
+        });
+
+        if (!res.ok) {
+          const errorData = await res.json();
+          throw new Error(errorData.error?.message || `HTTP ${res.status}`);
+        }
+
+        const data = await res.json();
+        return JSON.parse(data.candidates[0].content.parts[0].text);
+      } catch (err) {
+        lastError = err;
+        continue; // 다음 모델로 재시도
+      }
     }
-    
-    const data = await response.json();
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!text) throw new Error("AI가 응답하지 않습니다.");
-    return JSON.parse(text);
+    throw lastError;
   };
 
   const handleGenerateAiRecipe = async () => {
     if (!aiInput.trim()) return;
     setIsGenerating(true);
     try {
-      const system = "도시락 전문가입니다. JSON으로만 답하세요. 키: title, ingredients(배열), steps(배열)";
-      const parsed = await callGemini(`${aiInput} 재료로 도시락 레시피 만들어줘.`, system);
+      const systemPrompt = "당신은 도시락 레시피 전문가입니다. 반드시 JSON 형식으로만 응답하세요. 키값: title (문자열), ingredients (문자열 배열), steps (문자열 배열). 다른 설명은 절대 하지 마세요.";
+      const userPrompt = `${aiInput} 재료를 사용한 도시락 레시피를 만들어줘.`;
       
+      const parsed = await callGeminiAi(userPrompt, systemPrompt);
+
       const newRecipe = {
         id: Date.now().toString(),
         title: parsed.title,
@@ -65,12 +78,13 @@ export default function App() {
         steps: parsed.steps || [],
         createdAt: Date.now()
       };
+
       setEditingRecipe(newRecipe);
       setCurrentView('edit');
       setIsAiModalOpen(false);
       setAiInput('');
-    } catch (e) {
-      alert("AI 생성 실패: " + e.message);
+    } catch (error) {
+      alert("AI 연결 실패: " + error.message + "\nAPI 키가 활성화될 때까지 1~2분 정도 걸릴 수 있습니다.");
     } finally {
       setIsGenerating(false);
     }
@@ -80,11 +94,12 @@ export default function App() {
     if (!editingRecipe || editingRecipe.ingredients.length === 0) return;
     setIsAnalyzing(true);
     try {
-      const system = "영양학자입니다. JSON으로만 답하세요. 키: calories, protein, carbs, fat, tip";
-      const user = `재료 영양 분석: ${editingRecipe.ingredients.map(i => i.text).join(', ')}`;
-      const parsed = await callGemini(user, system);
+      const systemPrompt = "영양학 전문가로서 JSON으로만 응답하세요. 키값: calories (숫자), protein (숫자), carbs (숫자), fat (숫자), tip (문자열)";
+      const userPrompt = `다음 재료들의 총 영양 성분을 분석해줘: ${editingRecipe.ingredients.map(i => i.text).join(', ')}`;
+      
+      const parsed = await callGeminiAi(userPrompt, systemPrompt);
       updateEditingRecipe({ ...editingRecipe, nutrition: parsed });
-    } catch (e) {
+    } catch (error) {
       alert("영양 분석 실패");
     } finally {
       setIsAnalyzing(false);
@@ -128,16 +143,16 @@ export default function App() {
   };
 
   const renderEditor = () => (
-    <div className="flex flex-col h-full bg-slate-50 font-sans">
+    <div className="flex flex-col h-full bg-slate-50">
       <div className="flex items-center justify-between px-4 py-3 bg-white border-b sticky top-0 z-10">
         <button onClick={handleBackToList} className="p-2 text-slate-400"><ChevronLeft size={24} /></button>
         <button onClick={handleBackToList} className="px-5 py-2 bg-slate-900 text-white font-bold rounded-full text-sm">저장</button>
       </div>
       <div className="flex-1 overflow-y-auto p-5 space-y-6">
-        <input type="text" value={editingRecipe.title} onChange={(e) => updateEditingRecipe({ ...editingRecipe, title: e.target.value })} placeholder="도시락 제목" className="w-full text-2xl font-bold bg-transparent outline-none border-none focus:ring-0" />
+        <input type="text" value={editingRecipe.title} onChange={(e) => updateEditingRecipe({ ...editingRecipe, title: e.target.value })} placeholder="도시락 이름" className="w-full text-2xl font-bold bg-transparent outline-none" />
         <div className="bg-white p-5 rounded-3xl shadow-sm border border-slate-100">
           <div className="flex justify-between items-center mb-4">
-            <h3 className="font-bold text-slate-800">재료</h3>
+            <h3 className="font-bold">재료</h3>
             <button onClick={() => updateEditingRecipe({ ...editingRecipe, ingredients: [...editingRecipe.ingredients, { text: '', checked: false }] })} className="text-sky-500 text-xs font-bold">+ 추가</button>
           </div>
           <div className="space-y-3">
@@ -147,8 +162,8 @@ export default function App() {
                   const next = [...editingRecipe.ingredients];
                   next[i].text = e.target.value;
                   updateEditingRecipe({ ...editingRecipe, ingredients: next });
-                }} className="flex-1 bg-slate-50 rounded-xl px-3 py-2 text-sm outline-none" placeholder="재료" />
-                <button onClick={() => updateEditingRecipe({ ...editingRecipe, ingredients: editingRecipe.ingredients.filter((_, idx) => idx !== i) })} className="text-slate-300 px-1">×</button>
+                }} className="flex-1 bg-slate-50 rounded-xl px-3 py-2 text-sm outline-none" placeholder="예: 계란 2개" />
+                <button onClick={() => updateEditingRecipe({ ...editingRecipe, ingredients: editingRecipe.ingredients.filter((_, idx) => idx !== i) })} className="text-slate-300">×</button>
               </div>
             ))}
           </div>
@@ -157,7 +172,7 @@ export default function App() {
           </button>
           {editingRecipe.nutrition && (
             <div className="mt-4 p-4 bg-slate-50 rounded-2xl text-[11px] text-slate-600 space-y-1">
-              <div className="font-bold flex gap-3 text-slate-700">
+              <div className="font-bold flex gap-3 text-[12px]">
                 <span>🔥 {editingRecipe.nutrition.calories}kcal</span>
                 <span>💪 {editingRecipe.nutrition.protein}g</span>
                 <span>🍞 {editingRecipe.nutrition.carbs}g</span>
@@ -169,13 +184,13 @@ export default function App() {
         </div>
         <div className="bg-white p-5 rounded-3xl shadow-sm border border-slate-100">
           <div className="flex justify-between items-center mb-4">
-            <h3 className="font-bold text-slate-800">조리법</h3>
+            <h3 className="font-bold">조리법</h3>
             <button onClick={() => updateEditingRecipe({ ...editingRecipe, steps: [...editingRecipe.steps, ''] })} className="text-sky-500 text-xs font-bold">+ 추가</button>
           </div>
           <div className="space-y-4">
             {editingRecipe.steps.map((step, i) => (
               <div key={i} className="flex gap-3">
-                <span className="w-6 h-6 bg-slate-100 text-[10px] font-bold flex items-center justify-center rounded-full mt-1 flex-shrink-0">{i+1}</span>
+                <span className="w-5 h-5 bg-slate-100 text-[10px] font-bold flex items-center justify-center rounded-full mt-1.5 flex-shrink-0">{i+1}</span>
                 <textarea value={step} onChange={(e) => {
                   const next = [...editingRecipe.steps];
                   next[i] = e.target.value;
@@ -190,12 +205,12 @@ export default function App() {
   );
 
   const renderList = () => (
-    <div className="flex flex-col h-full bg-slate-50 font-sans">
-      <div className="px-6 pt-12 pb-6 bg-white border-b">
+    <div className="flex flex-col h-full bg-slate-50">
+      <div className="px-6 pt-12 pb-6">
         <h1 className="text-3xl font-black text-slate-800 tracking-tighter">나만의 도시락</h1>
-        <p className="text-slate-400 text-sm font-medium">건강하고 맛있는 레시피 관리 ✨</p>
+        <p className="text-slate-400 text-sm font-medium">오늘도 맛있는 레시피 ✨</p>
       </div>
-      <div className="flex-1 overflow-y-auto px-5 pb-24 space-y-4 pt-4">
+      <div className="flex-1 overflow-y-auto px-5 pb-24 space-y-4">
         {recipes.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-24 text-slate-300">
             <Utensils size={64} strokeWidth={1} className="mb-4" />
@@ -203,7 +218,7 @@ export default function App() {
           </div>
         ) : (
           recipes.map(recipe => (
-            <div key={recipe.id} onClick={() => handleEdit(recipe)} className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-slate-100 cursor-pointer active:scale-95 transition-all">
+            <div key={recipe.id} onClick={() => handleEdit(recipe)} className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-slate-100 cursor-pointer hover:shadow-md transition-all">
               <h3 className="text-lg font-bold text-slate-800 mb-2">{recipe.title || '제목 없음'}</h3>
               <p className="text-xs text-slate-400 line-clamp-2 mb-4">{recipe.steps.join(' ')}</p>
               <div className="flex justify-between items-center">
@@ -229,7 +244,7 @@ export default function App() {
         <button onClick={() => setIsAiModalOpen(true)} className="pointer-events-auto h-16 px-8 bg-white border border-slate-200 rounded-full shadow-xl flex items-center gap-3 font-bold text-slate-700">
           <Sparkles size={22} className="text-sky-500" /> AI 추천
         </button>
-        <button onClick={() => { setEditingRecipe({ id: Date.now().toString(), title: '', ingredients: [{ text: '', checked: false }], steps: [''], createdAt: Date.now() }); setCurrentView('edit'); }} className="pointer-events-auto w-16 h-16 bg-sky-500 text-white rounded-full shadow-xl flex items-center justify-center">
+        <button onClick={() => setEditingRecipe({ id: Date.now().toString(), title: '', ingredients: [{ text: '', checked: false }], steps: [''], createdAt: Date.now() }) || setCurrentView('edit')} className="pointer-events-auto w-16 h-16 bg-sky-500 text-white rounded-full shadow-xl flex items-center justify-center">
           <Plus size={32} />
         </button>
       </div>
@@ -241,13 +256,13 @@ export default function App() {
       {currentView === 'list' ? renderList() : renderEditor()}
       {isAiModalOpen && (
         <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-md z-50 flex items-center justify-center p-6">
-          <div className="bg-white rounded-[3rem] w-full p-8 shadow-2xl scale-in-center">
+          <div className="bg-white rounded-[3rem] w-full p-8 shadow-2xl">
             <div className="flex justify-between items-center mb-6">
               <h3 className="font-black text-xl text-slate-800 flex items-center gap-2"><Sparkles size={24} className="text-sky-500" /> AI 레시피</h3>
               <button onClick={() => setIsAiModalOpen(false)} className="bg-slate-50 p-2 rounded-full"><X size={20} className="text-slate-400" /></button>
             </div>
-            <textarea value={aiInput} onChange={(e) => setAiInput(e.target.value)} placeholder="재료를 입력하세요 (예: 두부, 계란)" className="w-full h-40 bg-slate-50 rounded-[2rem] p-6 text-sm outline-none resize-none mb-6 border-none focus:ring-2 focus:ring-sky-100" />
-            <button onClick={handleGenerateAiRecipe} disabled={isGenerating || !aiInput.trim()} className="w-full py-5 bg-slate-900 text-white font-black rounded-[2rem] flex justify-center items-center gap-3 transition-transform active:scale-95">
+            <textarea value={aiInput} onChange={(e) => setAiInput(e.target.value)} placeholder="재료를 입력해 보세요!" className="w-full h-40 bg-slate-50 rounded-[2rem] p-6 text-sm outline-none resize-none mb-6 border-none" />
+            <button onClick={handleGenerateAiRecipe} disabled={isGenerating || !aiInput.trim()} className="w-full py-5 bg-slate-900 text-white font-black rounded-[2rem] flex justify-center items-center gap-3">
               {isGenerating ? <Loader2 size={24} className="animate-spin" /> : "생성하기"}
             </button>
           </div>
